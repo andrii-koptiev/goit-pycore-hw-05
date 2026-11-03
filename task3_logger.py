@@ -1,10 +1,17 @@
+"""Analyze a log file: count entries per level and show level details.
+
+Usage: python3 task3_logger.py <file_path> [<level>]
+Tests: python3 task3_logger.py --test
+"""
+
 import sys
 from collections import defaultdict
-from typing import Optional, TypedDict
+from functools import wraps
+from typing import Any, Callable, Optional, TypedDict
 
 
 class LogLine(TypedDict):
-    """Represents a single parsed log entry with structured fields."""
+    """A single parsed log line."""
 
     date_time: str
     level: str
@@ -12,7 +19,7 @@ class LogLine(TypedDict):
 
 
 class LogsCount(TypedDict):
-    """Represents the strict summary counts for predefined log severity levels."""
+    """Number of log entries for each standard level."""
 
     info: int
     debug: int
@@ -20,16 +27,52 @@ class LogsCount(TypedDict):
     warning: int
 
 
-def parse_log_line(line: str) -> LogLine:
-    """Parses a raw log string line into a structured LogLine TypedDict object.
+def input_error(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Decorate a CLI function to handle file errors and exit cleanly.
 
-    Handles malformed lines gracefully by fallback routing.
+    Catches file-related errors raised by func, prints a readable message
+    instead of a traceback and exits with code 1.
 
     Args:
-        line: A single space-separated log string line from a log file.
+        func: Function to wrap, usually main().
 
     Returns:
-        A LogLine dictionary containing 'date_time', 'level', and 'message'.
+        Wrapped function with the same name and docstring as func.
+    """
+
+    @wraps(func)
+    def inner(*args, **kwargs) -> Any:
+        """Call func and turn known errors into messages."""
+        try:
+            return func(*args, **kwargs)
+        except FileNotFoundError:
+            print("Error: The file was not found. Check the path and try again.")
+            sys.exit(1)
+        except PermissionError:
+            print("Error: Permission denied. You do not have access rights to read.")
+            sys.exit(1)
+        except UnicodeDecodeError:
+            print(
+                "Error: Cannot read text encoding. Ensure file is stored in UTF-8 format."
+            )
+            sys.exit(1)
+        except Exception as e:
+            print(f"An unexpected system exception occurred while processing logs: {e}")
+            sys.exit(1)
+
+    return inner
+
+
+def parse_log_line(line: str) -> LogLine:
+    """Split a log line into date and time, level and message.
+
+    Malformed lines do not raise; missing parts get placeholder values.
+
+    Args:
+        line: Log line in the format "<date> <time> <LEVEL> <message>".
+
+    Returns:
+        A LogLine with date_time, level and message.
     """
     # Split by spaces up to the 3rd space to isolate date, time, and level safely
     parts = line.split(" ", 3)
@@ -50,26 +93,26 @@ def parse_log_line(line: str) -> LogLine:
 
 
 def filter_logs_by_level(logs: list[LogLine], level: str) -> list[LogLine]:
-    """Filters a collection of structured logs by a specific severity level.
+    """Return the logs that have the given level.
 
     Args:
-        logs: A list of parsed LogLine dictionaries.
-        level: The target log severity level to filter by (case-insensitive).
+        logs: Parsed log lines.
+        level: Level to keep, case-insensitive.
 
     Returns:
-        A list of LogLine dictionaries matching the targeted severity level.
+        Matching logs, in their original order.
     """
     return list(filter(lambda log: log["level"].casefold() == level.casefold(), logs))
 
 
 def count_logs_by_level(lines: list[LogLine]) -> LogsCount:
-    """Aggregates log counts categorized by their predefined severity levels.
+    """Count logs for each standard level.
 
     Args:
-        lines: A list of parsed LogLine dictionaries.
+        lines: Parsed log lines.
 
     Returns:
-        A strictly verified LogsCount dictionary containing absolute totals.
+        Counts for info, debug, error and warning; other levels are ignored.
     """
     # Use defaultdict to handle case-insensitive or missing keys safely
     counts: defaultdict[str, int] = defaultdict(int)
@@ -92,12 +135,12 @@ def count_logs_by_level(lines: list[LogLine]) -> LogsCount:
 def display_log_counts(
     counts: LogsCount, logs: list[LogLine], target_level: Optional[str] = None
 ) -> None:
-    """Prints a formatted summary table of log totals and optional log level details.
+    """Print a table of counts and, optionally, the logs for one level.
 
     Args:
-        counts: An aggregated LogsCount dictionary tracking occurrences.
-        logs: The complete list of parsed LogLine records.
-        target_level: An optional specific severity level to output granular lines for.
+        counts: Counts per level, from count_logs_by_level().
+        logs: All parsed log lines.
+        target_level: Level whose logs to print; None prints the table only.
     """
     # Print the table header
     print(f"{'Log Level':<16} | {'Count'}")
@@ -125,20 +168,21 @@ def display_log_counts(
 
 
 def load_logs(file_path: str) -> list[LogLine]:
-    """Reads a log file from the disk line by line and passes them for structure parsing.
+    """Read a log file and parse its non-empty lines.
 
     Args:
-        file_path: The filesystem path pointing to the source log file.
+        file_path: Path to a UTF-8 log file.
 
     Returns:
-        A parsed list of LogLine dictionaries.
+        Parsed log lines.
     """
     with open(file_path, "r", encoding="utf-8") as file:
         return [parse_log_line(line.strip()) for line in file if line.strip()]
 
 
+@input_error
 def main() -> None:
-    """Coordinates command-line argument reading, log file loading, and screen visualization."""
+    """Read CLI arguments, load the log file and print the report."""
     if len(sys.argv) < 2:
         print("Usage: python script.py <file_path> [<display_level>]")
         sys.exit(1)
@@ -146,34 +190,14 @@ def main() -> None:
     file_path = sys.argv[1]
     display_level = sys.argv[2] if len(sys.argv) > 2 else None
 
-    try:
-        logs = load_logs(file_path)
+    logs = load_logs(file_path)
 
-        if not logs:
-            print(f"File '{file_path}' was read successfully but contains no data.")
-            sys.exit(0)
+    if not logs:
+        print(f"File '{file_path}' was read successfully but contains no data.")
+        sys.exit(0)
 
-        level_count = count_logs_by_level(logs)
-        display_log_counts(level_count, logs, display_level)
-
-    except FileNotFoundError:
-        print(
-            f"Error: The file '{file_path}' was not found. Check the path and try again."
-        )
-        sys.exit(1)
-    except PermissionError:
-        print(
-            f"Error: Permission denied. You do not have access rights to read '{file_path}'."
-        )
-        sys.exit(1)
-    except UnicodeDecodeError:
-        print(
-            f"Error: Cannot read text encoding. Ensure '{file_path}' is stored in UTF-8 format."
-        )
-        sys.exit(1)
-    except Exception as e:
-        print(f"An unexpected system exception occurred while processing logs: {e}")
-        sys.exit(1)
+    level_count = count_logs_by_level(logs)
+    display_log_counts(level_count, logs, display_level)
 
 
 # Test cases. Run: python3 task3_logger.py --test
@@ -323,10 +347,7 @@ def run_tests() -> None:
 
         # Blank lines, surrounding whitespace and Windows line endings
         messy = (
-            "\n  \n"
-            "2024-01-22 08:30:01 INFO ok\r\n"
-            "\n"
-            "\t2024-01-22 09:00:00 DEBUG x  \n"
+            "\n  \n2024-01-22 08:30:01 INFO ok\r\n\n\t2024-01-22 09:00:00 DEBUG x  \n"
         )
         messy_logs = load_logs(write_file(tmp, "messy.log", messy.encode()))
         assert len(messy_logs) == 2
