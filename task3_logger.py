@@ -27,7 +27,7 @@ class LogsCount(TypedDict):
     warning: int
 
 
-def input_error(func: Callable[..., Any]) -> Callable[..., Any]:
+def handle_file_errors(func: Callable[..., Any]) -> Callable[..., Any]:
     """Decorate a CLI function to handle file errors and exit cleanly.
 
     Catches file-related errors raised by func, prints a readable message
@@ -45,11 +45,17 @@ def input_error(func: Callable[..., Any]) -> Callable[..., Any]:
         """Call func and turn known errors into messages."""
         try:
             return func(*args, **kwargs)
-        except FileNotFoundError:
-            print("Error: The file was not found. Check the path and try again.")
+        except FileNotFoundError as e:
+            print(
+                f"Error: The file '{e.filename}' was not found. "
+                "Check the path and try again."
+            )
             sys.exit(1)
-        except PermissionError:
-            print("Error: Permission denied. You do not have access rights to read.")
+        except PermissionError as e:
+            print(
+                "Error: Permission denied. "
+                f"You do not have access rights to read '{e.filename}'."
+            )
             sys.exit(1)
         except UnicodeDecodeError:
             print(
@@ -123,7 +129,7 @@ def count_logs_by_level(lines: list[LogLine]) -> LogsCount:
         counts[level_key] += 1
 
     # Construct the strict TypedDict structure explicitly
-    # Using counts.get() instead of direct lookup prevents runtime errors if keys miss
+    # The defaultdict gives 0 for levels that did not appear in the logs
     return {
         "info": counts["info"],
         "debug": counts["debug"],
@@ -180,7 +186,7 @@ def load_logs(file_path: str) -> list[LogLine]:
         return [parse_log_line(line.strip()) for line in file if line.strip()]
 
 
-@input_error
+@handle_file_errors
 def main() -> None:
     """Read CLI arguments, load the log file and print the report."""
     if len(sys.argv) < 2:
